@@ -57,7 +57,6 @@ fn checkDir(dir_path: []const u8) anyerror!void {
         switch (entry.kind) {
             .File => {
                 try checkFile(file_path);
-                try stdout.print("\n", .{});
             },
             .Directory => {
                 try checkDir(file_path);
@@ -83,6 +82,7 @@ fn checkFile(file_path: []const u8) !void {
         for (lines.items) |line| {
             try stdout.print("\x1b[1;32m{}\x1b[0m\n", .{line});
         }
+        try stdout.print("\n", .{});
     }
 }
 
