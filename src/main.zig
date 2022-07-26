@@ -5,13 +5,16 @@ const path = std.fs.path;
 const ArrayList = std.ArrayList;
 const heap = std.heap;
 const page_allocator = heap.page_allocator;
-const File = fs.File;
 const Reader = std.io.Reader;
-const stdout = std.io.getStdOut().writer();
+
 const process = std.process;
 const testing = std.testing;
 
+var stdout: std.io.BufferedWriter(4096, std.fs.File.Writer) = undefined;
 var a: std.mem.Allocator = undefined;
+const TITLE_FORMAT = "\x1b[0;31m{s}\x1b[0;0m\n";
+const LINE_FORMAT = "\x1b[1;32m{}\x1b[0m\n";
+
 pub fn main() anyerror!void {
     var arena = heap.ArenaAllocator.init(page_allocator);
     defer arena.deinit();
@@ -30,6 +33,9 @@ pub fn main() anyerror!void {
         debug.print("file or directory does not exist!", .{});
         return err;
     };
+    stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
+    const stdout_stream = stdout.writer();
+
     const stat = try file.stat();
     switch (stat.kind) {
         .File => {
@@ -39,7 +45,8 @@ pub fn main() anyerror!void {
             try checkDir(file_path);
         },
         else => {
-            try stdout.print("Unsupported file types\n", .{});
+            try stdout_stream.writeAll("Unsupported file types\n");
+            try stdout.flush();
         },
     }
 }
@@ -51,8 +58,8 @@ fn checkDir(dir_path: []const u8) anyerror!void {
     defer cwd.close();
 
     var cwd_iter = cwd.iterate();
+    var file_path_buf: [1024]u8 = undefined;
     while (try cwd_iter.next()) |entry| {
-        var file_path_buf: [1024]u8 = undefined;
         const file_path = try cwd.realpath(entry.name, &file_path_buf);
         switch (entry.kind) {
             .File => {
@@ -61,16 +68,19 @@ fn checkDir(dir_path: []const u8) anyerror!void {
             .Directory => {
                 try checkDir(file_path);
             },
-            else => {},
+            else => {
+                continue;
+            },
         }
     }
 }
 
 // check whether it contains trailing spaces
-// TODO spawn threads for each file
 fn checkFile(file_path: []const u8) !void {
     var file = try fs.openFileAbsolute(file_path, .{});
     var lines = ArrayList(u32).init(a);
+
+    const stdout_stream = stdout.writer();
     const reader = file.reader();
     // reverse order release lines -> release file
     defer file.close();
@@ -78,18 +88,19 @@ fn checkFile(file_path: []const u8) !void {
 
     try getLinesOfTrailingSpaces(&reader, &lines);
     if (lines.items.len > 0) {
-        try stdout.print("\x1b[0;31m{s}\x1b[0;0m\n", .{file_path});
+        try stdout_stream.print(TITLE_FORMAT, .{file_path});
         for (lines.items) |line| {
-            try stdout.print("\x1b[1;32m{}\x1b[0m\n", .{line});
+            try stdout_stream.print(LINE_FORMAT, .{line});
         }
-        try stdout.print("\n", .{});
+        try stdout_stream.writeAll("\n");
     }
+    try stdout.flush();
 }
 
 // return the line numbers of which lines contain the trailing spaces
 fn getLinesOfTrailingSpaces(reader: anytype, lines: *ArrayList(u32)) anyerror!void {
     var line_number: u32 = 1;
-    var trailing_space: bool = false;
+    var trailing: bool = false;
     while (true) {
         const byte = reader.readByte() catch |err| switch (err) {
             error.EndOfStream => return,
@@ -97,17 +108,17 @@ fn getLinesOfTrailingSpaces(reader: anytype, lines: *ArrayList(u32)) anyerror!vo
         };
         switch (byte) {
             ' ' => {
-                trailing_space = true;
+                trailing = true;
             },
             '\n' => {
-                if (trailing_space) {
+                if (trailing) {
                     try lines.append(line_number);
                 }
-                trailing_space = false;
                 line_number += 1;
+                trailing = false;
             },
             else => {
-                trailing_space = false;
+                trailing = false;
             },
         }
     }
