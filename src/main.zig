@@ -9,8 +9,9 @@ const Reader = std.io.Reader;
 
 const process = std.process;
 const testing = std.testing;
+const BUF_SIZE = 8 * (1 << 10);
 
-var stdout: std.io.BufferedWriter(4096, std.fs.File.Writer) = undefined;
+var stdout: std.io.BufferedWriter(BUF_SIZE, std.fs.File.Writer) = undefined;
 var a: std.mem.Allocator = undefined;
 const TITLE_FORMAT = "\x1b[0;31m{s}\x1b[0;0m\n";
 const LINE_FORMAT = "\x1b[1;32m{}\x1b[0m\n";
@@ -33,7 +34,7 @@ pub fn main() anyerror!void {
         debug.print("file or directory does not exist!", .{});
         return err;
     };
-    stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
+    stdout = .{ .unbuffered_writer = std.io.getStdOut().writer() };
     const stdout_stream = stdout.writer();
 
     const stat = try file.stat();
@@ -100,27 +101,20 @@ fn checkFile(file_path: []const u8) !void {
 // return the line numbers of which lines contain the trailing spaces
 fn getLinesOfTrailingSpaces(reader: anytype, lines: *ArrayList(u32)) anyerror!void {
     var line_number: u32 = 1;
-    var trailing: bool = false;
+    var pre_byte: u8 = '\n';
+
     while (true) {
-        const byte = reader.readByte() catch |err| switch (err) {
+        const byte = reader.readByte() catch |e| switch (e) {
             error.EndOfStream => return,
-            else => |e| return e,
+            else => return e,
         };
-        switch (byte) {
-            ' ' => {
-                trailing = true;
-            },
-            '\n' => {
-                if (trailing) {
-                    try lines.append(line_number);
-                }
-                line_number += 1;
-                trailing = false;
-            },
-            else => {
-                trailing = false;
-            },
+        if (byte == '\n') {
+            if (pre_byte == ' ') {
+                try lines.append(line_number);
+            }
+            line_number += 1;
         }
+        pre_byte = byte;
     }
 }
 
