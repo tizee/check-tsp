@@ -55,13 +55,19 @@ pub fn main() anyerror!void {
 // path could be a relative path and should be a path to a directory
 // Note that this behavior is determined by the cwd().OpenDir
 fn checkDir(dir_path: []const u8) anyerror!void {
-    var cwd = try fs.cwd().openDir(dir_path, .{ .iterate = true });
+    var cwd = fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |e| switch (e) {
+        error.FileNotFound => return,
+        else => return e,
+    };
     defer cwd.close();
 
     var cwd_iter = cwd.iterate();
     var file_path_buf: [1024]u8 = undefined;
     while (try cwd_iter.next()) |entry| {
-        const file_path = try cwd.realpath(entry.name, &file_path_buf);
+        const file_path = cwd.realpath(entry.name, &file_path_buf) catch |e| switch (e) {
+            error.FileNotFound => return,
+            else => return e,
+        };
         switch (entry.kind) {
             .File => {
                 try checkFile(file_path);
@@ -77,8 +83,11 @@ fn checkDir(dir_path: []const u8) anyerror!void {
 }
 
 // check whether it contains trailing spaces
-fn checkFile(file_path: []const u8) !void {
-    var file = try fs.openFileAbsolute(file_path, .{});
+fn checkFile(file_path: []const u8) anyerror!void {
+    var file = fs.openFileAbsolute(file_path, .{}) catch |e| switch (e) {
+        error.FileNotFound => return,
+        else => return e,
+    };
     var lines = ArrayList(u32).init(a);
 
     const stdout_stream = stdout.writer();
