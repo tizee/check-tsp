@@ -21,21 +21,24 @@ pub fn main() anyerror!void {
     defer arena.deinit();
 
     a = arena.allocator();
-    var arg_iter = process.args();
+    var arg_iter = try process.argsWithAllocator(a);
 
-    _ = arg_iter.skip();
-
-    const dir_arg = try (arg_iter.next(a) orelse {
-        debug.print("expect the first argument to be path to a directory/file\n", .{});
-        return error.InvalidArgs;
+    var prog = arg_iter.next(a);
+    var dir_arg = try (arg_iter.next(a) orelse {
+        std.log.err("usage: {s} [file | directory]", .{prog});
+        std.os.exit(1);
     });
-    const file_path = try path.resolve(a, &[_][]const u8{dir_arg});
-    const file = fs.openFileAbsolute(file_path, .{}) catch |err| {
-        debug.print("file or directory does not exist!", .{});
-        return err;
-    };
-    stdout = .{ .unbuffered_writer = std.io.getStdOut().writer() };
-    const stdout_stream = stdout.writer();
+
+    var cwd_buf: [std.os.PATH_MAX]u8 = undefined;
+    var cwd = try std.process.getCwd(&cwd_buf);
+
+    var file_path = try path.resolve(a, &.{ cwd_buf[0..cwd.len], dir_arg });
+    try check(file_path);
+}
+
+fn check(file_path: []const u8) anyerror!void {
+    var file = try fs.openFileAbsolute(file_path, .{});
+    defer file.close();
 
     const stat = try file.stat();
     switch (stat.kind) {
@@ -46,6 +49,9 @@ pub fn main() anyerror!void {
             try checkDir(file_path);
         },
         else => {
+            stdout = .{ .unbuffered_writer = std.io.getStdOut().writer() };
+            const stdout_stream = stdout.writer();
+
             try stdout_stream.writeAll("Unsupported file types\n");
             try stdout.flush();
         },
@@ -55,25 +61,38 @@ pub fn main() anyerror!void {
 // path could be a relative path and should be a path to a directory
 // Note that this behavior is determined by the cwd().OpenDir
 fn checkDir(dir_path: []const u8) anyerror!void {
-    var cwd = fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |e| switch (e) {
+    if (std.mem.containsAtLeast(u8, dir_path, 1, ".git")) {
+        return;
+    }
+    if (std.mem.containsAtLeast(u8, dir_path, 1, "zig-cache")) {
+        return;
+    }
+    if (std.mem.containsAtLeast(u8, dir_path, 1, "zig-out")) {
+        return;
+    }
+
+    var dir = fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |e| switch (e) {
         error.FileNotFound => return,
         else => return e,
     };
-    defer cwd.close();
+    var walker = try dir.walk(a);
 
-    var cwd_iter = cwd.iterate();
-    var file_path_buf: [1024]u8 = undefined;
-    while (try cwd_iter.next()) |entry| {
-        const file_path = cwd.realpath(entry.name, &file_path_buf) catch |e| switch (e) {
-            error.FileNotFound => return,
+    defer dir.close();
+    defer walker.deinit();
+
+    var file_path_buf: [BUF_SIZE]u8 = undefined;
+    while (try walker.next()) |entry| {
+        const file_path = dir.realpath(entry.path, &file_path_buf) catch |e| switch (e) {
+            error.FileNotFound => {
+                std.log.err("{s} not found", .{entry.path});
+                continue;
+            },
             else => return e,
         };
+
         switch (entry.kind) {
             .File => {
                 try checkFile(file_path);
-            },
-            .Directory => {
-                try checkDir(file_path);
             },
             else => {
                 continue;
@@ -84,6 +103,15 @@ fn checkDir(dir_path: []const u8) anyerror!void {
 
 // check whether it contains trailing spaces
 fn checkFile(file_path: []const u8) anyerror!void {
+    if (std.mem.containsAtLeast(u8, file_path, 1, ".git")) {
+        return;
+    }
+    if (std.mem.containsAtLeast(u8, file_path, 1, "zig-cache")) {
+        return;
+    }
+    if (std.mem.containsAtLeast(u8, file_path, 1, "zig-out")) {
+        return;
+    }
     var file = fs.openFileAbsolute(file_path, .{}) catch |e| switch (e) {
         error.FileNotFound => return,
         else => return e,
